@@ -53,12 +53,24 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
         DefaultDnsQuestion dnsQuestion = query.recordAt(DnsSection.QUESTION);
         query.sender().getHostName();
         String connectIP = query.sender().getAddress().toString();
-        String domainRegex = "\\.\\d+\\." + domain.replace(".", "\\.") + "\\.$";
+        String domainRegex = "\\.\\d+\\." + domain.replace(".", "\\.") + "\\.$"; // remove main dns, get sub domain dns.
         String subDomain = dnsQuestion.name().replaceAll(domainRegex, "");
         String[] hd = dnsQuestion.name().replace('.' + domain + '.', "").split("\\.");
+        // System.out.println(domainRegex);
+        // System.out.println(subDomain);
+        // System.out.println(Arrays.toString(hd));
+        // System.out.println(dnsQuestion.name());
+    
+        // Refuse dns query that is not my domain.
+        if (!Pattern.compile(".*" + domainRegex).matcher(dnsQuestion.name()).matches()){
+            //System.out.println("not my domain");
+            return;
+        }
         try {
             logID = Integer.parseInt(hd[hd.length - 1]);
         } catch (NumberFormatException n) {
+            System.out.println("logID error:");
+            System.out.println(dnsQuestion.name());
             return;
         }
         String ipRegex = "^((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})(\\.((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})){3}$";
@@ -88,7 +100,7 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
                 ip[i] = (byte) Integer.parseInt(s[i]);
             }
             answerIP = Unpooled.wrappedBuffer(ip);
-        }else if(dnsRecordAService.getDnsRecordABySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1)) != null){
+        }  else if(dnsRecordAService.getDnsRecordABySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1)) != null){
             DnsRecordA dnsRecordA = dnsRecordAService.getDnsRecordABySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1));
             List<Byte> byteIP = stringIP2ByteArrayIP(dnsRecordA.getIp());
             answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
@@ -121,8 +133,9 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
             answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
         }
         response.addRecord(DnsSection.QUESTION, dnsQuestion);
-        DefaultDnsRawRecord queryAnswer = new DefaultDnsRawRecord(dnsQuestion.name(), DnsRecordType.A, 0, answerIP);
+        DefaultDnsRawRecord queryAnswer = new DefaultDnsRawRecord(dnsQuestion.name(), DnsRecordType.A, 10, answerIP);
         response.addRecord(DnsSection.ANSWER, queryAnswer);
+        //System.out.println(response);
         ctx.writeAndFlush(response);
         String address = getIPAdderssInfo(connectIP.split("/")[1]);
         String connectAddress = connectIP+' '+address;
