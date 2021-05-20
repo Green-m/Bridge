@@ -77,7 +77,7 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
             response.addRecord(DnsSection.ANSWER, queryAnswer);
             response.clear(); // return no answer or return 127.0.0.1
             ctx.writeAndFlush(response);
-            System.out.println(response);
+            //System.out.println(response);
             return;
         }
         try {
