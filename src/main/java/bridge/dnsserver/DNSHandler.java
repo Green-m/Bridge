@@ -60,10 +60,24 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
         // System.out.println(subDomain);
         // System.out.println(Arrays.toString(hd));
         // System.out.println(dnsQuestion.name());
+        // System.out.println(query.toString());
+        // System.out.println(dnsQuestion.toString());
     
+        
+        // domain example  = "test.example.com"
+        // dnsQuestion.name() example = "aaa.1.test.example.com."
         // Refuse dns query that is not my domain.
-        if (!Pattern.compile(".*" + domainRegex).matcher(dnsQuestion.name()).matches()){
+        //if (!Pattern.compile(".*" + domainRegex).matcher(dnsQuestion.name()).matches()){
+        if (!dnsQuestion.name().endsWith(domain + '.')){
             //System.out.println("not my domain");
+            List<Byte> byteIP = stringIP2ByteArrayIP("127.0.0.1");
+            answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
+            response.addRecord(DnsSection.QUESTION, dnsQuestion);
+            DefaultDnsRawRecord queryAnswer = new DefaultDnsRawRecord(dnsQuestion.name(), DnsRecordType.A, 10, answerIP);
+            response.addRecord(DnsSection.ANSWER, queryAnswer);
+            response.clear(); // return no answer or return 127.0.0.1
+            ctx.writeAndFlush(response);
+            System.out.println(response);
             return;
         }
         try {
