@@ -160,6 +160,12 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
         }
     }
 
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        cause.printStackTrace();
+        ctx.close();
+    }
+
 
     private List<Byte> stringIP2ByteArrayIP(String ip) {
         return Arrays.asList(ip.split("\\.")).stream().map(x -> (byte) Integer.parseInt(x)).collect(Collectors.toList());
@@ -186,6 +192,9 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
                 }
             }
         }catch (HttpServerErrorException e){
+        //catch (Exception e){
+            //e.printStackTrace(System.out);
+            System.out.println("too many requests");
             return "";
         }
         return address;
