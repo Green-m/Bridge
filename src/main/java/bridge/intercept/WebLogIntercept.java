@@ -37,7 +37,7 @@ public class WebLogIntercept implements HandlerInterceptor {
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         String host = request.getHeader("host");
         Integer logID;
-        if (host.equals(DnslogConfig.managerDomain)) {
+        if (host != null && host.equals(DnslogConfig.managerDomain)) {
             return true;
         } else {
             ObjectMapper mapper = new ObjectMapper();
@@ -45,6 +45,14 @@ public class WebLogIntercept implements HandlerInterceptor {
             response.setCharacterEncoding("utf-8");
             response.setContentType("application/json; charset=utf-8");
             HashMap<String, String> map = new HashMap<String, String>();
+            // if host be null
+            if (host == null ) {
+                map.put("status", "error");
+                map.put("message", "request host no logid found");
+                writer.write(mapper.writeValueAsString(map));
+                return false;
+            }
+
             String[] hd = host.replace('.' + DnslogConfig.dnslogDomain, "").split("\\.");
             try {
                 logID = Integer.parseInt(hd[hd.length - 1]);
