@@ -85,6 +85,7 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
         } catch (NumberFormatException n) {
             System.out.println("logID error:");
             System.out.println(dnsQuestion.name());
+            ctx.writeAndFlush(response);
             return;
         }
         String ipRegex = "^((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})(\\.((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})){3}$";
@@ -146,18 +147,29 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
             List<Byte> byteIP = stringIP2ByteArrayIP(DnslogConfig.ip);
             answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
         }
-        response.addRecord(DnsSection.QUESTION, dnsQuestion);
-        DefaultDnsRawRecord queryAnswer = new DefaultDnsRawRecord(dnsQuestion.name(), DnsRecordType.A, 10, answerIP);
-        response.addRecord(DnsSection.ANSWER, queryAnswer);
-        //System.out.println(response);
-        ctx.writeAndFlush(response);
-        String address = getIPAdderssInfo(connectIP.split("/")[1]);
-        String connectAddress = connectIP+' '+address;
-        if(!dnsQuestion.name().replaceAll("\\d+\\." + domain.replace(".", "\\.") + "\\.$", "").equals("")){
-            DnsLog dnslog = new DnsLog(UUID.randomUUID().toString(), dnsQuestion.name().substring(0, dnsQuestion.name().length() - 1), new Timestamp(System.currentTimeMillis()), connectAddress, dnsQuestion.type().toString(), logID);
-            dnsLogService.addDnsLog(dnslog);
-            getIPAdderssInfo(connectIP.split("/")[1]);
+        try{
+            response.addRecord(DnsSection.QUESTION, dnsQuestion);
+            DefaultDnsRawRecord queryAnswer = new DefaultDnsRawRecord(dnsQuestion.name(), DnsRecordType.A, 10, answerIP);
+            response.addRecord(DnsSection.ANSWER, queryAnswer);
+            //System.out.println(response);
+            //ctx.writeAndFlush(response);
+        }catch (Exception e) {
+            System.out.println("Error when send response" + e);
+        }finally {
+			ctx.writeAndFlush(response);
         }
+        
+        ctx.channel().eventLoop().execute(() -> {
+            try {
+                String address = getIPAdderssInfo(connectIP.split("/")[1]);
+                String connectAddress = connectIP+' '+address;
+                DnsLog dnslog = new DnsLog(UUID.randomUUID().toString(), dnsQuestion.name().substring(0, dnsQuestion.name().length() - 1), new Timestamp(System.currentTimeMillis()), connectAddress, dnsQuestion.type().toString(), logID);
+                dnsLogService.addDnsLog(dnslog);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        });
+        
     }
 
     @Override
@@ -192,7 +204,7 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
                 }
             }
         }catch (HttpServerErrorException e){
-        //catch (Exception e){
+        //catch (HttpStatusCodeException e){
             //e.printStackTrace(System.out);
             System.out.println("too many requests");
             return "";
