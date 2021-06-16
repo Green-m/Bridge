@@ -10,6 +10,7 @@ import bridge.service.DnsRecordRebindService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.Maps;
 import io.netty.buffer.ByteBuf;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -47,136 +48,132 @@ public class DNSHandler extends SimpleChannelInboundHandler<DatagramDnsQuery> {
 
     @Override
     public void channelRead0(ChannelHandlerContext ctx, DatagramDnsQuery query) throws Exception {
-        ByteBuf answerIP;
-        int logID;
-        DatagramDnsResponse response = new DatagramDnsResponse(query.recipient(), query.sender(), query.id());
-        DefaultDnsQuestion dnsQuestion = query.recordAt(DnsSection.QUESTION);
-        query.sender().getHostName();
-        String connectIP = query.sender().getAddress().toString();
-        String domainRegex = "\\.\\d+\\." + domain.replace(".", "\\.") + "\\.$"; // remove main dns, get sub domain dns.
-        String subDomain = dnsQuestion.name().replaceAll(domainRegex, "");
-        String[] hd = dnsQuestion.name().replace('.' + domain + '.', "").split("\\.");
-        // System.out.println(domainRegex);
-        // System.out.println(subDomain);
-        // System.out.println(Arrays.toString(hd));
-        // System.out.println(dnsQuestion.name());
-        // System.out.println(query.toString());
-        // System.out.println(dnsQuestion.toString());
-    
-        
-        // domain example  = "test.example.com"
-        // dnsQuestion.name() example = "aaa.1.test.example.com."
-        // Refuse dns query that is not my domain.
-        //if (!Pattern.compile(".*" + domainRegex).matcher(dnsQuestion.name()).matches()){
-        if (!dnsQuestion.name().endsWith(domain + '.')){
-            //System.out.println("not my domain");
-            List<Byte> byteIP = stringIP2ByteArrayIP("127.0.0.1");
-            answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
-            response.addRecord(DnsSection.QUESTION, dnsQuestion);
-            DefaultDnsRawRecord queryAnswer = new DefaultDnsRawRecord(dnsQuestion.name(), DnsRecordType.A, 10, answerIP);
-            response.addRecord(DnsSection.ANSWER, queryAnswer);
-            response.clear(); // return no answer or return 127.0.0.1
-            ctx.writeAndFlush(response);
-            //System.out.println(response);
-            return;
-        }
-        try {
-            logID = Integer.parseInt(hd[hd.length - 1]);
-        } catch (NumberFormatException n) {
-            System.out.println("logID error:");
-            System.out.println(dnsQuestion.name());
-            ctx.writeAndFlush(response);
-            return;
-        }
-        String ipRegex = "^((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})(\\.((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})){3}$";
-        String rebindRegex = "^((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})(\\.((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})){3}\\.((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})(\\.((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})){3}$";
-        if (Pattern.compile(rebindRegex).matcher(subDomain).matches()) {
-            String[] s = subDomain.split("\\.");
-            byte[] ip = new byte[4];
-            byte[] rebindIP = new byte[4];
-            for (int i = 0; i < s.length; i++) {
-                if (i < 4) {
-                    ip[i] = (byte) Integer.parseInt(s[i]);
-                } else {
-                    rebindIP[i - 4] = (byte) Integer.parseInt(s[i]);
-                }
-            }
-            if (questionDomainMap.containsKey(dnsQuestion.name())) {
-                answerIP = Unpooled.wrappedBuffer(questionDomainMap.get(dnsQuestion.name()));
-                questionDomainMap.remove(dnsQuestion.name());
-            } else {
-                answerIP = Unpooled.wrappedBuffer(ip);
-                questionDomainMap.put(dnsQuestion.name(), rebindIP);
-            }
-        } else if (Pattern.compile(ipRegex).matcher(subDomain).matches()) {
-            String[] s = subDomain.split("\\.");
-            byte[] ip = new byte[s.length];
-            for (int i = 0; i < s.length; i++) {
-                ip[i] = (byte) Integer.parseInt(s[i]);
-            }
-            answerIP = Unpooled.wrappedBuffer(ip);
-        }  else if(dnsRecordAService.getDnsRecordABySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1)) != null){
-            DnsRecordA dnsRecordA = dnsRecordAService.getDnsRecordABySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1));
-            List<Byte> byteIP = stringIP2ByteArrayIP(dnsRecordA.getIp());
-            answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
-        }else if(dnsRecordRebindService.getDnsRecordRebindBySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1)) != null){
-            DnsRecordRebind dnsRecordRebind = dnsRecordRebindService.getDnsRecordRebindBySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1));
-            String rebindSubDomain = dnsRecordRebind.getSubdomain();
-            if(rebindRecordMap.containsKey(rebindSubDomain)){
-                String matchIP = isInIPC(connectIP.split("/")[1], rebindRecordMap.get(rebindSubDomain));
-                 if(!matchIP.equals("")){
-                     List<Byte> byteIP = stringIP2ByteArrayIP(dnsRecordRebind.getIp2());
-                     answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
-                     rebindRecordMap.get(rebindSubDomain).remove(matchIP);
-                 }else{
-                     List<Byte> byteIP = stringIP2ByteArrayIP(dnsRecordRebind.getIp1());
-                     answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
-                     rebindRecordMap.get(rebindSubDomain).add(connectIP.split("/")[1]);
-                 }
 
-            }else{
-                List<String> tmpList = new ArrayList<>();
-                System.out.println(connectIP);
-                tmpList.add(connectIP.split("/")[1]);
-                rebindRecordMap.put(rebindSubDomain, tmpList);
-                List<Byte> byteIP = stringIP2ByteArrayIP(dnsRecordRebind.getIp1());
+        //final DatagramDnsQuery query = (DatagramDnsQuery) msg;
+        DatagramDnsResponse response = null;
+        
+        try {
+            ByteBuf answerIP;
+            final int logID;
+            response = new DatagramDnsResponse(query.recipient(), query.sender(), query.id());
+            DefaultDnsQuestion dnsQuestion = query.recordAt(DnsSection.QUESTION);
+            query.sender().getHostName();
+            String connectIP = query.sender().getAddress().toString();
+            String domainRegex = "\\.\\d+\\." + domain.replace(".", "\\.") + "\\.$"; // remove main dns, get sub domain dns.
+            String subDomain = dnsQuestion.name().replaceAll(domainRegex, "");
+            String[] hd = dnsQuestion.name().replace('.' + domain + '.', "").split("\\.");
+            //logID = Integer.parseInt(hd[hd.length - 1]);
+
+            if (!dnsQuestion.name().endsWith(domain + '.')){
+                //System.out.println("not my domain");
+                List<Byte> byteIP = stringIP2ByteArrayIP("127.0.0.1");
+                answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
+                response.addRecord(DnsSection.QUESTION, dnsQuestion);
+                DefaultDnsRawRecord queryAnswer = new DefaultDnsRawRecord(dnsQuestion.name(), DnsRecordType.A, 10, answerIP);
+                response.addRecord(DnsSection.ANSWER, queryAnswer);
+                response.clear(); // return no answer or return 127.0.0.1
+                //ctx.writeAndFlush(response);
+                return;
+            }
+            
+            try {
+                logID = Integer.parseInt(hd[hd.length - 1]);
+            } catch (NumberFormatException n) {
+                System.out.println("logID error:");
+                System.out.println(dnsQuestion.name());
+                return;
+            }
+
+            final String ipRegex = "^((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})(\\.((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})){3}$";
+            final String rebindRegex = "^((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})(\\.((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})){3}\\.((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})(\\.((2(5[0-5]|[0-4]\\d))|[0-1]?\\d{1,2})){3}$";
+            if (Pattern.compile(rebindRegex).matcher(subDomain).matches()) {
+                String[] s = subDomain.split("\\.");
+                byte[] ip = new byte[4];
+                byte[] rebindIP = new byte[4];
+                for (int i = 0; i < s.length; i++) {
+                    if (i < 4) {
+                        ip[i] = (byte) Integer.parseInt(s[i]);
+                    } else {
+                        rebindIP[i - 4] = (byte) Integer.parseInt(s[i]);
+                    }
+                }
+                if (questionDomainMap.containsKey(dnsQuestion.name())) {
+                    answerIP = Unpooled.wrappedBuffer(questionDomainMap.get(dnsQuestion.name()));
+                    questionDomainMap.remove(dnsQuestion.name());
+                } else {
+                    answerIP = Unpooled.wrappedBuffer(ip);
+                    questionDomainMap.put(dnsQuestion.name(), rebindIP);
+                }
+            } else if (Pattern.compile(ipRegex).matcher(subDomain).matches()) {
+                String[] s = subDomain.split("\\.");
+                byte[] ip = new byte[s.length];
+                for (int i = 0; i < s.length; i++) {
+                    ip[i] = (byte) Integer.parseInt(s[i]);
+                }
+                answerIP = Unpooled.wrappedBuffer(ip);
+            }  else if(dnsRecordAService.getDnsRecordABySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1)) != null){
+                DnsRecordA dnsRecordA = dnsRecordAService.getDnsRecordABySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1));
+                List<Byte> byteIP = stringIP2ByteArrayIP(dnsRecordA.getIp());
+                answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
+            }else if(dnsRecordRebindService.getDnsRecordRebindBySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1)) != null){
+                DnsRecordRebind dnsRecordRebind = dnsRecordRebindService.getDnsRecordRebindBySubdomain(dnsQuestion.name().substring(0,dnsQuestion.name().length()-1));
+                String rebindSubDomain = dnsRecordRebind.getSubdomain();
+                if(rebindRecordMap.containsKey(rebindSubDomain)){
+                    String matchIP = isInIPC(connectIP.split("/")[1], rebindRecordMap.get(rebindSubDomain));
+                    if(!matchIP.equals("")){
+                        List<Byte> byteIP = stringIP2ByteArrayIP(dnsRecordRebind.getIp2());
+                        answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
+                        rebindRecordMap.get(rebindSubDomain).remove(matchIP);
+                    }else{
+                        List<Byte> byteIP = stringIP2ByteArrayIP(dnsRecordRebind.getIp1());
+                        answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
+                        rebindRecordMap.get(rebindSubDomain).add(connectIP.split("/")[1]);
+                    }
+
+                }else{
+                    List<String> tmpList = new ArrayList<>();
+                    System.out.println(connectIP);
+                    tmpList.add(connectIP.split("/")[1]);
+                    rebindRecordMap.put(rebindSubDomain, tmpList);
+                    List<Byte> byteIP = stringIP2ByteArrayIP(dnsRecordRebind.getIp1());
+                    answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
+                }
+                System.out.println(rebindRecordMap);
+            } else {
+                List<Byte> byteIP = stringIP2ByteArrayIP(DnslogConfig.ip);
                 answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
             }
-            System.out.println(rebindRecordMap);
-        } else {
-            List<Byte> byteIP = stringIP2ByteArrayIP(DnslogConfig.ip);
-            answerIP = Unpooled.wrappedBuffer(new byte[]{byteIP.get(0), byteIP.get(1), byteIP.get(2), byteIP.get(3)});
-        }
-        try{
+
             response.addRecord(DnsSection.QUESTION, dnsQuestion);
             DefaultDnsRawRecord queryAnswer = new DefaultDnsRawRecord(dnsQuestion.name(), DnsRecordType.A, 10, answerIP);
             response.addRecord(DnsSection.ANSWER, queryAnswer);
-            //System.out.println(response);
-            //ctx.writeAndFlush(response);
+
+            ctx.channel().eventLoop().execute(() -> {
+                try {
+                    String address = getIPAdderssInfo(connectIP.split("/")[1]);
+                    String connectAddress = connectIP+' '+address;
+                    DnsLog dnslog = new DnsLog(UUID.randomUUID().toString(), dnsQuestion.name().substring(0, dnsQuestion.name().length() - 1), new Timestamp(System.currentTimeMillis()), connectAddress, dnsQuestion.type().toString(), logID);
+                    dnsLogService.addDnsLog(dnslog);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
+
         }catch (Exception e) {
-            System.out.println("Error when send response" + e);
+            System.out.println("Error when send response");
+            e.printStackTrace();
         }finally {
-			ctx.writeAndFlush(response);
+            ctx.writeAndFlush(response);
         }
-        
-        ctx.channel().eventLoop().execute(() -> {
-            try {
-                String address = getIPAdderssInfo(connectIP.split("/")[1]);
-                String connectAddress = connectIP+' '+address;
-                DnsLog dnslog = new DnsLog(UUID.randomUUID().toString(), dnsQuestion.name().substring(0, dnsQuestion.name().length() - 1), new Timestamp(System.currentTimeMillis()), connectAddress, dnsQuestion.type().toString(), logID);
-                dnsLogService.addDnsLog(dnslog);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        });
+
         
     }
 
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        cause.printStackTrace();
-        ctx.close();
-    }
+    // @Override
+    // public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+    //     cause.printStackTrace();
+    //     ctx.close();
+    // }
 
 
     private List<Byte> stringIP2ByteArrayIP(String ip) {
